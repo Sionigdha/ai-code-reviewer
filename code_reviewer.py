@@ -70,7 +70,7 @@ If no bugs found, reply: NO BUGS FOUND
 # The prompt contains the buggy code injected via f-string
 # Gemini reads it and returns bugs in our requested format
 response = client.models.generate_content(
-    model="gemini-2.5-flash",  # free tier — change 2.5 to 2.0
+    model="gemini-2.5-flash",  # free tier — change 2.5 to 
     contents=prompt
 )
 
