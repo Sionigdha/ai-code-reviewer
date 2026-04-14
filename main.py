@@ -129,10 +129,12 @@ async def review_pr(request: Request):
             f"```\n{file.patch}\n```\n\n"
 
             "Review the ADDED lines (+) in the diff.\n"
-            "Use the full file and README context to:\n"
-            "1. Check if the change is consistent with existing patterns\n"
-            "2. Check if the change follows repo conventions\n"
-            "3. Find bugs, security issues, or bad practices\n\n"
+"Use the full file and README context to:\n"
+"1. Check if the change is consistent with existing code style and patterns\n"
+"2. Find bugs, security issues, or bad practices\n"
+"3. IMPORTANT: If you suggest a fix, it must be consistent with the existing "
+"code style in the file — do not mix styles in your suggestions\n"
+"4. Do NOT raise multiple issues about the same root cause — consolidate them\n\n"
 
             "For each issue use EXACTLY this format:\n\n"
             "ISSUE [number]:\n"
@@ -197,23 +199,32 @@ async def review_pr(request: Request):
     total_issues = total_critical + total_warning + total_suggestion
 
     # ── CALCULATE HEALTH SCORE ────────────────────────────
-    # Score starts at 100, deduct by severity
-    # CRITICAL = -20, WARNING = -8, SUGGESTION = -2
-    score = 100
-    score -= total_critical   * 20
-    score -= total_warning    * 8
-    score -= total_suggestion * 2
-    score = max(0, score)  # never go below 0
+    # Check if any file couldn't be reviewed
+    unreviewed = sum(1 for r in all_reviews if "unavailable" in r["review"].lower() or "could not review" in r["review"].lower())
 
-    # Score label
-    if score >= 85:
-        score_label = "Excellent"
-    elif score >= 70:
-        score_label = "Good"
-    elif score >= 50:
-        score_label = "Needs Work"
+    # If Gemini couldn't review — score is None
+    if unreviewed == len(all_reviews) and len(all_reviews) > 0:
+        score = None
+        score_label = "Unavailable"
     else:
-        score_label = "Poor"
+        # Score starts at 100, deduct by severity
+        # CRITICAL = -25, WARNING = -10, SUGGESTION = -3
+        # Also penalise for skipped files
+        score = 100
+        score -= total_critical   * 25
+        score -= total_warning    * 10
+        score -= total_suggestion * 3
+        score -= len(skipped_files) * 2  # small penalty for skipped files
+        score = max(0, min(100, score))  # keep between 0 and 100
+
+        if score >= 90:
+            score_label = "Excellent"
+        elif score >= 75:
+            score_label = "Good"
+        elif score >= 50:
+            score_label = "Needs Work"
+        else:
+            score_label = "Poor — needs serious attention"
 
     # ── BUILD POLISHED GITHUB COMMENT ────────────────────
     from datetime import datetime
@@ -222,8 +233,11 @@ async def review_pr(request: Request):
     review_body  = "# AI Code Review\n\n"
 
     # Score card
-    review_body += f"## PR Health Score: {score}/100 — {score_label}\n\n"
-    review_body += f"> **{pr_title}**\n\n"
+if score is None:
+        review_body += f"## PR Health Score: —/100 — {score_label}\n\n"
+        review_body += "> Gemini was unavailable to complete the review. Please try redelivering the webhook.\n\n"
+    else:
+        review_body += f"## PR Health Score: {score}/100 — {score_label}\n\n"    review_body += f"> **{pr_title}**\n\n"
 
     # Summary table
     review_body += "| Metric | Count |\n"
@@ -262,7 +276,7 @@ async def review_pr(request: Request):
     return {
         "status": "review posted",
         "pr": pr_number,
-        "score": score,
+        "score": score if score is not None else "unavailable",
         "files_reviewed": len(all_reviews),
         "files_skipped": len(skipped_files),
         "total_issues": total_issues
