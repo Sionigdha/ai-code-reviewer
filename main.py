@@ -151,40 +151,88 @@ async def review_pr(request: Request):
             "deletions": file.deletions    # how many lines removed
         })
 
-    # ── BUILD PROFESSIONAL GITHUB COMMENT ────────────────
-    # Clean markdown formatting that looks great on GitHub
-    review_body = "# AI Code Review\n\n"
-    review_body += f"**PR:** {pr_title}\n"
-    review_body += f"**Files reviewed:** {len(all_reviews)}"
+    # ── COUNT ISSUES BY SEVERITY ─────────────────────────
+    # Parse each review to count CRITICAL / WARNING / SUGGESTION
+    total_critical = 0
+    total_warning = 0
+    total_suggestion = 0
 
+    for r in all_reviews:
+        text = r["review"].upper()
+        total_critical   += text.count("CRITICAL")
+        total_warning    += text.count("WARNING")
+        total_suggestion += text.count("SUGGESTION")
+
+    total_issues = total_critical + total_warning + total_suggestion
+
+    # ── CALCULATE HEALTH SCORE ────────────────────────────
+    # Score starts at 100, deduct by severity
+    # CRITICAL = -20, WARNING = -8, SUGGESTION = -2
+    score = 100
+    score -= total_critical   * 20
+    score -= total_warning    * 8
+    score -= total_suggestion * 2
+    score = max(0, score)  # never go below 0
+
+    # Score label
+    if score >= 85:
+        score_label = "Excellent"
+    elif score >= 70:
+        score_label = "Good"
+    elif score >= 50:
+        score_label = "Needs Work"
+    else:
+        score_label = "Poor"
+
+    # ── BUILD POLISHED GITHUB COMMENT ────────────────────
+    from datetime import datetime
+    now = datetime.utcnow().strftime("%B %d, %Y at %H:%M UTC")
+
+    review_body  = "# AI Code Review\n\n"
+
+    # Score card
+    review_body += f"## PR Health Score: {score}/100 — {score_label}\n\n"
+    review_body += f"> **{pr_title}**\n\n"
+
+    # Summary table
+    review_body += "| Metric | Count |\n"
+    review_body += "|--------|-------|\n"
+    review_body += f"| Files reviewed | {len(all_reviews)} |\n"
     if skipped_files:
-        review_body += f" | **Skipped:** {len(skipped_files)}"
+        review_body += f"| Files skipped | {len(skipped_files)} |\n"
+    review_body += f"| CRITICAL issues | {total_critical} |\n"
+    review_body += f"| WARNING issues | {total_warning} |\n"
+    review_body += f"| SUGGESTION issues | {total_suggestion} |\n"
+    review_body += f"| Total issues | {total_issues} |\n\n"
+    review_body += "---\n\n"
 
-    review_body += "\n\n---\n\n"
-
-    # Add each file's review as a clean section
+    # Detailed file reviews
     for r in all_reviews:
         review_body += f"## `{r['file']}`\n"
         review_body += f"*+{r['additions']} lines added, -{r['deletions']} lines removed*\n\n"
         review_body += f"{r['review']}\n\n"
         review_body += "---\n\n"
 
-    # List skipped files at the bottom
+    # Skipped files
     if skipped_files:
         review_body += "### Files skipped\n"
         for f in skipped_files:
             review_body += f"- `{f}`\n"
-        review_body += "\n"
+        review_body += "\n---\n\n"
 
-    review_body += "*Reviewed by AI Code Reviewer — powered by Gemini 2.5 Flash*"
+    # Footer
+    review_body += f"*Reviewed by AI Code Reviewer v1.0 • {now}*\n"
+    review_body += "*Powered by Gemini 2.0 Flash*"
 
     # Post the comment on the PR
     pr.create_issue_comment(review_body)
-    print(f"Review posted on PR #{pr_number}!")
+    print(f"Review posted on PR #{pr_number}! Score: {score}/100")
 
     return {
         "status": "review posted",
         "pr": pr_number,
+        "score": score,
         "files_reviewed": len(all_reviews),
-        "files_skipped": len(skipped_files)
+        "files_skipped": len(skipped_files),
+        "total_issues": total_issues
     }
