@@ -71,74 +71,105 @@ async def review_pr(request: Request):
 
     for file in files:
 
-        # Skip files with no diff (binary, deleted etc)
+        # Skip files with no diff
         if not file.patch:
             skipped_files.append(file.filename + " (no diff)")
             continue
 
-        # Edge case: diff too large — skip to avoid Gemini token errors
+        # Skip diffs that are too large
         if len(file.patch) > MAX_DIFF_CHARS:
             skipped_files.append(file.filename + " (diff too large)")
-            print(f"Skipping {file.filename} — diff too large ({len(file.patch)} chars)")
+            print(f"Skipping {file.filename} — diff too large")
             continue
 
         print(f"Reviewing: {file.filename}")
 
-        # ── IMPROVED PROMPT ───────────────────────────────
-        # Better prompt with:
-        # 1. Clear role and expertise level
-        # 2. Severity rating for each issue
-        # 3. Strict output format for consistency
-        # 4. Asks for positive feedback too (more balanced)
+        # ── LEVEL 1: FULL FILE CONTEXT ───────────────────
+        # Get the complete current file — not just the diff
+        # This lets Gemini see what surrounds the changed lines
+        # e.g. if a function is inconsistent with others in the file
+        full_file_content = ""
+        try:
+            file_obj = repo.get_contents(file.filename, ref=pr.head.sha)
+            full_content = file_obj.decoded_content.decode("utf-8")
+            # Limit to 3000 chars so we don't blow Gemini's context
+            if len(full_content) > 3000:
+                full_file_content = full_content[:3000] + "\n... (truncated)"
+            else:
+                full_file_content = full_content
+        except Exception as e:
+            print(f"Could not fetch full file: {e}")
+            full_file_content = "(full file unavailable)"
+
+        # ── LEVEL 2: REPO CONTEXT ────────────────────────
+        # Read the repo's README to understand conventions
+        # Only fetch once — store it outside loop for efficiency
+        repo_context = ""
+        try:
+            readme = repo.get_contents("README.md")
+            readme_text = readme.decoded_content.decode("utf-8")
+            # Take first 1500 chars — enough for purpose + conventions
+            repo_context = readme_text[:1500]
+        except Exception:
+            repo_context = "(no README found)"
+
+        # ── IMPROVED PROMPT WITH FULL CONTEXT ────────────
         prompt = (
-            "You are an expert software engineer doing a thorough code review. "
-            "You have 10+ years of experience and care deeply about code quality, "
-            "security, and best practices.\n\n"
+            "You are an expert software engineer doing a thorough code review.\n\n"
 
-            f"File being reviewed: {file.filename}\n\n"
+            # Level 2 — repo context
+            f"REPOSITORY CONTEXT (from README):\n{repo_context}\n\n"
 
-            "Git diff (lines starting with + are newly added code to review):\n"
-            f"{file.patch}\n\n"
+            # Level 1 — full file
+            f"FULL CURRENT FILE ({file.filename}):\n"
+            f"```\n{full_file_content}\n```\n\n"
 
-            "Review ONLY the added lines (starting with +).\n\n"
+            # The actual diff
+            f"GIT DIFF (lines with + are newly added):\n"
+            f"```\n{file.patch}\n```\n\n"
 
-            "For each issue found, use EXACTLY this format:\n\n"
+            "Review the ADDED lines (+) in the diff.\n"
+            "Use the full file and README context to:\n"
+            "1. Check if the change is consistent with existing patterns\n"
+            "2. Check if the change follows repo conventions\n"
+            "3. Find bugs, security issues, or bad practices\n\n"
+
+            "For each issue use EXACTLY this format:\n\n"
             "ISSUE [number]:\n"
             "- Severity: [CRITICAL / WARNING / SUGGESTION]\n"
-            "- Line: [line number or range]\n"
-            "- Problem: [clear explanation of what is wrong and why it matters]\n"
+            "- Line: [line number]\n"
+            "- Problem: [what is wrong and why it matters]\n"
             "- Fix:\n"
             "```\n"
-            "[corrected code here]\n"
+            "[corrected code]\n"
             "```\n\n"
 
             "Severity guide:\n"
-            "CRITICAL = will cause crashes, security holes, or data loss\n"
-            "WARNING  = bad practice, potential bugs, or performance issues\n"
-            "SUGGESTION = code style, readability, or minor improvements\n\n"
+            "CRITICAL = crashes, security holes, data loss\n"
+            "WARNING  = bad practice, potential bugs, performance\n"
+            "SUGGESTION = style, readability, minor improvements\n\n"
 
-            "After listing all issues, add a one-line summary:\n"
-            "SUMMARY: [overall assessment of the code quality]\n\n"
+            "After all issues add:\n"
+            "SUMMARY: [one line overall assessment]\n\n"
 
-            "If the code has no issues at all, reply with exactly:\n"
-            "LGTM — No issues found. Code looks clean and well-written."
+            "If no issues: reply exactly:\n"
+            "LGTM — No issues found. Code looks clean and consistent with the repo."
         )
 
         # ── RETRY LOGIC ──────────────────────────────────
-        # Try up to 3 times if Gemini is busy (503 errors)
         review_text = None
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-2.0-flash",
                     contents=prompt
                 )
                 review_text = response.text
-                break  # success — stop retrying
+                break
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
-                    wait = (attempt + 1) * 15  # 15s, then 30s
+                    wait = (attempt + 1) * 15
                     print(f"Waiting {wait}s before retry...")
                     time.sleep(wait)
                 else:
@@ -147,8 +178,8 @@ async def review_pr(request: Request):
         all_reviews.append({
             "file": file.filename,
             "review": review_text,
-            "additions": file.additions,   # how many lines added
-            "deletions": file.deletions    # how many lines removed
+            "additions": file.additions,
+            "deletions": file.deletions
         })
 
     # ── COUNT ISSUES BY SEVERITY ─────────────────────────
