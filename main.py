@@ -233,11 +233,12 @@ async def review_pr(request: Request):
     review_body  = "# AI Code Review\n\n"
 
     # Score card
-if score is None:
+    if score is None:
         review_body += f"## PR Health Score: —/100 — {score_label}\n\n"
         review_body += "> Gemini was unavailable to complete the review. Please try redelivering the webhook.\n\n"
     else:
-        review_body += f"## PR Health Score: {score}/100 — {score_label}\n\n"    review_body += f"> **{pr_title}**\n\n"
+        review_body += f"## PR Health Score: {score}/100 — {score_label}\n\n"   
+        review_body += f"> **{pr_title}**\n\n"
 
     # Summary table
     review_body += "| Metric | Count |\n"
