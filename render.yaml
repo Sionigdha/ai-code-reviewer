@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-code-reviewer
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
