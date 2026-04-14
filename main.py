@@ -161,7 +161,7 @@ async def review_pr(request: Request):
         for attempt in range(3):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model="gemini-2.5-flash",
                     contents=prompt
                 )
                 review_text = response.text
@@ -253,7 +253,7 @@ async def review_pr(request: Request):
 
     # Footer
     review_body += f"*Reviewed by AI Code Reviewer v1.0 • {now}*\n"
-    review_body += "*Powered by Gemini 2.0 Flash*"
+    review_body += "*Powered by Gemini 2.5 Flash*"
 
     # Post the comment on the PR
     pr.create_issue_comment(review_body)
