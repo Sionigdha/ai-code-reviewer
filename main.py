@@ -1,15 +1,11 @@
 # ============================================================
-# main.py — AI Code Reviewer (Production Ready v2.0)
-# FastAPI server that receives GitHub PR webhooks,
-# reviews code with Gemini AI, and posts professional comments.
-# Run with: uvicorn main:app --reload
+# main.py — AI Code Reviewer (Fixed Version)
+# Back to basics - closer to your original working version
+# with added debug logging to find the GitHub posting issue
 # ============================================================
 
 import os
 import time
-import hmac
-import hashlib
-import re
 from fastapi import FastAPI, Request
 from google import genai
 from github import Github, Auth
@@ -24,157 +20,101 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 auth = Auth.Token(os.getenv("GITHUB_TOKEN"))
 github_client = Github(auth=auth)
 
-# Max files to review per PR — avoids reviewing 50 files at once
 MAX_FILES = 10
-
-# Max diff size per file — Gemini has token limits
 MAX_DIFF_CHARS = 6000
 
-
-# ── ENDPOINT 1: Health check ──────────────────────────────
 @app.get("/")
 def home():
-    return {"status": "AI Code Reviewer v2.0 is running!"}
+    return {"status": "AI Code Reviewer (Fixed) is running!"}
 
-
-# ── HELPER: Parse Gemini Response ─────────────────────────
-def parse_review_response(review_text, filename):
-    """Parse Gemini's structured response into categorized issues"""
-    
-    issues = {
-        'critical': [],
-        'style': [],
-        'suggestions': [],
-        'lgtm': False
-    }
-    
-    # Check if it's a clean review
-    if 'LGTM' in review_text.upper() or 'no issues found' in review_text.lower():
-        issues['lgtm'] = True
-        return issues
-    
-    # Parse structured issues using regex
-    issue_pattern = r'(ISSUE|BUG)\s*(\d+):\s*\n?-\s*Severity:\s*(CRITICAL|STYLE_VIOLATION|WARNING|SUGGESTION)\s*\n?-\s*Line:\s*(.+?)\n?-\s*Problem:\s*(.+?)\n?-\s*Fix:\s*\n?```\n?(.*?)\n?```'
-    
-    matches = re.findall(issue_pattern, review_text, re.DOTALL | re.IGNORECASE)
-    
-    for match in matches:
-        issue_type, issue_num, severity, line, problem, fix = match
-        
-        issue_data = {
-            'line': line.strip(),
-            'problem': problem.strip(),
-            'fix': fix.strip() if fix.strip() else 'See problem description',
-            'file': filename
-        }
-        
-        severity_clean = severity.upper()
-        if severity_clean == 'CRITICAL':
-            issues['critical'].append(issue_data)
-        elif severity_clean == 'STYLE_VIOLATION':
-            issues['style'].append(issue_data)
-        else:  # WARNING or SUGGESTION
-            issues['suggestions'].append(issue_data)
-    
-    return issues
-
-
-# ── HELPER: Determine PR Status ──────────────────────────
-def determine_pr_status(all_issues):
-    """Determine overall PR status based on issues found"""
-    
-    total_critical = sum(len(issues['critical']) for issues in all_issues.values())
-    total_style = sum(len(issues['style']) for issues in all_issues.values())
-    total_suggestions = sum(len(issues['suggestions']) for issues in all_issues.values())
-    
-    if total_critical > 0:
-        return {
-            'status': '❌ NEEDS WORK',
-            'emoji': '🔴',
-            'label': 'Blocking issues found',
-            'description': 'Critical issues must be fixed before merge'
-        }
-    elif total_style > 0:
-        return {
-            'status': '⚠️ APPROVE WITH CHANGES',
-            'emoji': '🟡', 
-            'label': 'Style issues found',
-            'description': 'Minor issues should be addressed'
-        }
-    elif total_suggestions > 0:
-        return {
-            'status': '✅ LGTM WITH SUGGESTIONS',
-            'emoji': '🟢',
-            'label': 'Ready to merge',
-            'description': 'Code looks good with minor improvement opportunities'
-        }
-    else:
-        return {
-            'status': '✅ EXCELLENT',
-            'emoji': '🔥',
-            'label': 'Above expectations', 
-            'description': 'Clean, consistent, and well-written code'
-        }
-
-
-# ── ENDPOINT 2: Webhook receiver ──────────────────────────
 @app.post("/review")
 async def review_pr(request: Request):
-
-    payload = await request.json()
-
-    # Only review when PR is opened or new commits pushed
+    
+    # Basic error handling for JSON
+    try:
+        payload = await request.json()
+    except Exception as e:
+        return {"error": f"JSON parsing failed: {e}"}
+    
+    if not payload or "action" not in payload:
+        return {"error": "Invalid payload"}
+        
     action = payload.get("action")
     if action not in ["opened", "synchronize"]:
-        return {"status": "ignored"}
+        return {"status": "ignored", "reason": f"Action '{action}' not supported"}
 
-    repo_name = payload["repository"]["full_name"]
-    pr_number = payload["pull_request"]["number"]
-    pr_title  = payload["pull_request"]["title"]
-    pr_branch = payload["pull_request"]["head"]["ref"]
+    try:
+        repo_name = payload["repository"]["full_name"]
+        pr_number = payload["pull_request"]["number"]
+        pr_title = payload["pull_request"]["title"]
+        pr_branch = payload.get("pull_request", {}).get("head", {}).get("ref", "unknown")
+    except KeyError as e:
+        return {"error": f"Missing required field: {e}"}
 
     print(f"\n{'='*50}")
-    print(f"Reviewing PR #{pr_number}: {pr_title}")
-    print(f"Repo: {repo_name} • Branch: {pr_branch}")
+    print(f"🔍 DEBUG: Reviewing PR #{pr_number}: {pr_title}")
+    print(f"🔍 DEBUG: Repo: {repo_name} • Branch: {pr_branch}")
+    print(f"🔍 DEBUG: GitHub Token Present: {'Yes' if os.getenv('GITHUB_TOKEN') else 'No'}")
+    print(f"🔍 DEBUG: Gemini Key Present: {'Yes' if os.getenv('GEMINI_API_KEY') else 'No'}")
     print(f"{'='*50}")
 
-    repo  = github_client.get_repo(repo_name)
-    pr    = repo.get_pull(pr_number)
-    files = list(pr.get_files())
+    # Connect to GitHub with detailed error handling
+    try:
+        repo = github_client.get_repo(repo_name)
+        print(f"✅ Successfully connected to repo: {repo.full_name}")
+    except Exception as e:
+        error_msg = f"Failed to access repository '{repo_name}': {e}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+        
+    try:
+        pr = repo.get_pull(pr_number)
+        print(f"✅ Successfully fetched PR #{pr_number}: {pr.title}")
+    except Exception as e:
+        error_msg = f"Failed to access PR #{pr_number}: {e}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
+        
+    try:
+        files = list(pr.get_files())
+        print(f"✅ Found {len(files)} changed files")
+    except Exception as e:
+        error_msg = f"Failed to get PR files: {e}"
+        print(f"❌ {error_msg}")
+        return {"error": error_msg}
 
-    # Edge case: too many files — only review first MAX_FILES
+    # Limit files 
     if len(files) > MAX_FILES:
-        print(f"PR has {len(files)} files — reviewing first {MAX_FILES} only")
+        print(f"⚠️  Limiting to first {MAX_FILES} files")
         files = files[:MAX_FILES]
 
-    all_file_issues = {}
+    all_reviews = []
     skipped_files = []
 
-    # Get repo context once
+    # Get repo context
     repo_context = ""
     try:
         readme = repo.get_contents("README.md")
         readme_text = readme.decoded_content.decode("utf-8")
         repo_context = readme_text[:1500]
-    except Exception:
+        print(f"✅ Got README context ({len(repo_context)} chars)")
+    except Exception as e:
         repo_context = "(no README found)"
+        print(f"⚠️  No README found: {e}")
 
     for file in files:
-
-        # Skip files with no diff
         if not file.patch:
             skipped_files.append(file.filename + " (no diff)")
             continue
 
-        # Skip diffs that are too large
         if len(file.patch) > MAX_DIFF_CHARS:
             skipped_files.append(file.filename + " (diff too large)")
-            print(f"Skipping {file.filename} — diff too large")
+            print(f"⚠️  Skipping {file.filename} — diff too large")
             continue
 
-        print(f"Reviewing: {file.filename}")
+        print(f"🔍 Reviewing: {file.filename}")
 
-        # Get full file content for context
+        # Get full file content
         full_file_content = ""
         try:
             file_obj = repo.get_contents(file.filename, ref=pr.head.sha)
@@ -184,61 +124,41 @@ async def review_pr(request: Request):
             else:
                 full_file_content = full_content
         except Exception as e:
-            print(f"Could not fetch full file: {e}")
+            print(f"⚠️  Could not fetch full file: {e}")
             full_file_content = "(full file unavailable)"
 
-        # Enhanced prompt for professional review
-        prompt = (
-            "You are a senior software engineer conducting a thorough code review.\n\n"
+        # Simplified prompt (closer to original)
+        prompt = f"""
+You are a senior software engineer doing a code review.
 
-            f"REPOSITORY CONTEXT (from README):\n{repo_context}\n\n"
+REPOSITORY CONTEXT:
+{repo_context}
 
-            f"FULL CURRENT FILE ({file.filename}):\n"
-            f"```\n{full_file_content}\n```\n\n"
+FULL FILE ({file.filename}):
+```
+{full_file_content}
+```
 
-            f"GIT DIFF (lines with + are newly added):\n"
-            f"```\n{file.patch}\n```\n\n"
+GIT DIFF (+ lines are new code):
+```
+{file.patch}
+```
 
-            "ANALYSIS FRAMEWORK:\n"
-            "First, analyze existing patterns in the full file:\n"
-            "- Function/variable naming conventions\n"
-            "- Code structure and organization\n"
-            "- Documentation style\n"
-            "- Error handling patterns\n"
-            "- Import organization\n\n"
+Review the added lines (+) in the diff.
+Check if new code is consistent with existing patterns in the file.
+Find bugs, security issues, and style inconsistencies.
 
-            "Then review ONLY the added lines (+) in the diff.\n"
-            "Categorize issues by severity:\n\n"
+For each issue use this format:
+ISSUE 1:
+- Severity: [CRITICAL / STYLE_VIOLATION / SUGGESTION]  
+- Line: [line number]
+- Problem: [what is wrong]
+- Fix: [suggested correction]
 
-            "CRITICAL = Security vulnerabilities, crashes, data loss, logic errors\n"
-            "STYLE_VIOLATION = Inconsistent with existing code patterns in this file/repo\n"
-            "SUGGESTION = Best practices, performance, readability improvements\n\n"
+If no issues: reply "LGTM — Code looks clean and consistent."
+"""
 
-            "IMPORTANT RULES:\n"
-            "1. NEW CODE MUST MATCH existing patterns in the file exactly\n"
-            "2. Any deviation from file conventions = STYLE_VIOLATION\n"
-            "3. Focus on maintainability and team consistency\n"
-            "4. Provide concrete code examples in fixes\n"
-            "5. Don't raise multiple issues for the same root cause\n\n"
-
-            "Use EXACTLY this format for each issue:\n\n"
-            "ISSUE [number]:\n"
-            "- Severity: [CRITICAL / STYLE_VIOLATION / SUGGESTION]\n"
-            "- Line: [line number or range]\n"
-            "- Problem: [what is wrong and why it matters for this codebase]\n"
-            "- Fix:\n"
-            "```\n"
-            "[corrected code that matches existing patterns]\n"
-            "```\n\n"
-
-            "After all issues add:\n"
-            "SUMMARY: [one line assessment]\n\n"
-
-            "If no issues found, reply exactly:\n"
-            "LGTM — Code is clean and follows existing patterns consistently."
-        )
-
-        # Retry logic for Gemini API calls
+        # Call Gemini with retry logic
         review_text = None
         for attempt in range(3):
             try:
@@ -247,131 +167,128 @@ async def review_pr(request: Request):
                     contents=prompt
                 )
                 review_text = response.text
+                print(f"✅ Got Gemini review for {file.filename} ({len(review_text)} chars)")
                 break
             except Exception as e:
-                print(f"Attempt {attempt + 1} failed: {e}")
+                print(f"⚠️  Gemini attempt {attempt + 1} failed: {e}")
                 if attempt < 2:
-                    wait = (attempt + 1) * 15
-                    print(f"Waiting {wait}s before retry...")
-                    time.sleep(wait)
+                    time.sleep((attempt + 1) * 10)
                 else:
-                    review_text = "Could not review — Gemini unavailable after 3 attempts."
+                    review_text = f"Could not review {file.filename} — Gemini unavailable after 3 attempts."
 
-        # Parse the review into structured issues
-        file_issues = parse_review_response(review_text, file.filename)
-        all_file_issues[file.filename] = {
-            'issues': file_issues,
-            'raw_review': review_text,
-            'additions': file.additions,
-            'deletions': file.deletions
-        }
+        all_reviews.append({
+            "file": file.filename,
+            "review": review_text,
+            "additions": file.additions,
+            "deletions": file.deletions
+        })
 
-    # Determine overall PR status
-    pr_status = determine_pr_status({f: data['issues'] for f, data in all_file_issues.items()})
-    
-    # Count total issues
-    total_critical = sum(len(data['issues']['critical']) for data in all_file_issues.values())
-    total_style = sum(len(data['issues']['style']) for data in all_file_issues.values())
-    total_suggestions = sum(len(data['issues']['suggestions']) for data in all_file_issues.values())
+    # Simple issue counting (like original)
+    total_critical = 0
+    total_style = 0
+    total_suggestions = 0
+
+    for r in all_reviews:
+        text = r["review"].upper()
+        total_critical += text.count("CRITICAL")
+        total_style += text.count("STYLE_VIOLATION")
+        total_suggestions += text.count("SUGGESTION") + text.count("WARNING")
+
     total_issues = total_critical + total_style + total_suggestions
 
-    # Build professional GitHub comment
+    # Determine status (simple logic)
+    if total_critical > 0:
+        status_emoji = "🔴"
+        status_text = "❌ NEEDS WORK"
+        status_label = "Critical issues found"
+    elif total_style > 0:
+        status_emoji = "🟡"
+        status_text = "⚠️ APPROVE WITH CHANGES"
+        status_label = "Style issues found"
+    elif total_suggestions > 0:
+        status_emoji = "🟢"
+        status_text = "✅ LGTM WITH SUGGESTIONS"
+        status_label = "Minor suggestions"
+    else:
+        status_emoji = "🔥"
+        status_text = "✅ EXCELLENT"
+        status_label = "Clean code"
+
+    print(f"📊 Review Summary: {status_text}")
+    print(f"   🔴 Critical: {total_critical}")
+    print(f"   🟡 Style: {total_style}")
+    print(f"   💡 Suggestions: {total_suggestions}")
+
+    # Build comment (simplified format)
     from datetime import datetime
     now = datetime.utcnow().strftime("%B %d, %Y at %H:%M UTC")
 
-    review_body = f"## AI Code Review • `{pr_branch}`\n\n"
-    review_body += f"**Status: {pr_status['status']}**\n\n"
-    review_body += f"> {pr_status['description']}\n\n"
-    review_body += "---\n\n"
+    comment_body = f"## AI Code Review • `{pr_branch}`\n\n"
+    comment_body += f"**Status: {status_text}**\n\n"
+    comment_body += f"{status_emoji} **Summary:** {status_label}\n\n"
+    comment_body += "---\n\n"
 
-    # Critical Issues Section
-    if total_critical > 0:
-        review_body += f"### 🔴 Critical Issues ({total_critical})\n"
-        review_body += "*Must be fixed before merge*\n\n"
-        
-        for filename, data in all_file_issues.items():
-            for issue in data['issues']['critical']:
-                review_body += f"**`{filename}` line {issue['line']}** - {issue['problem']}\n"
-                if issue['fix'] != 'See problem description':
-                    review_body += f"```python\n{issue['fix']}\n```\n\n"
-                else:
-                    review_body += "\n"
-        review_body += "---\n\n"
+    # Add individual file reviews
+    for r in all_reviews:
+        comment_body += f"### `{r['file']}`\n"
+        comment_body += f"*+{r['additions']} lines, -{r['deletions']} lines*\n\n"
+        comment_body += f"{r['review']}\n\n"
+        comment_body += "---\n\n"
 
-    # Style Issues Section  
-    if total_style > 0:
-        review_body += f"### 🟡 Style Issues ({total_style})\n"
-        review_body += "*Should be fixed for consistency*\n\n"
-        
-        for filename, data in all_file_issues.items():
-            for issue in data['issues']['style']:
-                review_body += f"**`{filename}` line {issue['line']}** - {issue['problem']}\n"
-                if issue['fix'] != 'See problem description':
-                    review_body += f"```python\n{issue['fix']}\n```\n\n"
-                else:
-                    review_body += "\n"
-        review_body += "---\n\n"
-
-    # Suggestions Section
-    if total_suggestions > 0:
-        review_body += f"### 💡 Suggestions ({total_suggestions})\n"
-        review_body += "*Consider these improvements*\n\n"
-        
-        for filename, data in all_file_issues.items():
-            for issue in data['issues']['suggestions']:
-                review_body += f"**`{filename}` line {issue['line']}** - {issue['problem']}\n"
-                if issue['fix'] != 'See problem description':
-                    review_body += f"```python\n{issue['fix']}\n```\n\n"
-                else:
-                    review_body += "\n"
-        review_body += "---\n\n"
-
-    # Files Summary
-    review_body += "### Files Analyzed\n"
-    for filename, data in all_file_issues.items():
-        issues = data['issues']
-        if issues['lgtm']:
-            review_body += f"- ✅ `{filename}` - Clean, follows repo patterns\n"
-        elif len(issues['critical']) > 0:
-            review_body += f"- 🔴 `{filename}` - {len(issues['critical'])} critical issues\n"
-        elif len(issues['style']) > 0:
-            review_body += f"- 🟡 `{filename}` - {len(issues['style'])} style issues\n"
-        else:
-            review_body += f"- 💡 `{filename}` - Minor suggestions only\n"
-
-    # Skipped files
+    # Summary stats
+    comment_body += f"**Files Reviewed:** {len(all_reviews)}\n"
     if skipped_files:
-        review_body += f"\n**Skipped ({len(skipped_files)}):** " + ", ".join(f"`{f}`" for f in skipped_files)
+        comment_body += f"**Files Skipped:** {len(skipped_files)}\n"
+    comment_body += f"**Issues Found:** {total_critical} critical, {total_style} style, {total_suggestions} suggestions\n\n"
+    comment_body += f"*Reviewed by AI Code Reviewer • {now}*"
 
-    review_body += "\n\n"
-
-    # Next Steps
-    if total_critical > 0:
-        review_body += "**Next Steps:** Fix critical issues, then this is ready to merge.\n\n"
-    elif total_style > 0:
-        review_body += "**Next Steps:** Address style consistency, then we're good to go.\n\n"
-    else:
-        review_body += "**Next Steps:** Ready to merge! 🚀\n\n"
-
-    # Footer
-    review_body += "---\n"
-    review_body += f"*AI Code Reviewer v2.0 • {now}*\n"
-    review_body += "*Powered by Gemini AI*"
-
-    # Post the comment on the PR
-    pr.create_issue_comment(review_body)
-    print(f"Professional review posted on PR #{pr_number}! Status: {pr_status['status']}")
-
-    return {
-        "status": "review posted",
-        "pr": pr_number,
-        "pr_status": pr_status['label'],
-        "files_reviewed": len(all_file_issues),
-        "files_skipped": len(skipped_files),
-        "issues": {
-            "critical": total_critical,
-            "style": total_style, 
-            "suggestions": total_suggestions,
-            "total": total_issues
+    # POST COMMENT TO GITHUB (with detailed debugging)
+    print(f"🔍 DEBUG: About to post comment to GitHub...")
+    print(f"🔍 DEBUG: Comment length: {len(comment_body)} characters")
+    print(f"🔍 DEBUG: PR object type: {type(pr)}")
+    
+    try:
+        print(f"🔍 DEBUG: Calling pr.create_issue_comment()...")
+        comment = pr.create_issue_comment(comment_body)
+        print(f"🎉 SUCCESS! Comment posted successfully!")
+        print(f"🔗 Comment URL: {comment.html_url}")
+        print(f"💬 Comment ID: {comment.id}")
+        
+        return {
+            "status": "review posted",
+            "pr": pr_number,
+            "pr_status": status_label,
+            "files_reviewed": len(all_reviews),
+            "files_skipped": len(skipped_files),
+            "comment_url": comment.html_url,
+            "comment_id": comment.id,
+            "issues": {
+                "critical": total_critical,
+                "style": total_style,
+                "suggestions": total_suggestions,
+                "total": total_issues
+            }
         }
-    }
+        
+    except Exception as e:
+        error_msg = f"Failed to post GitHub comment: {e}"
+        print(f"❌ {error_msg}")
+        print(f"🔍 DEBUG: Error type: {type(e).__name__}")
+        print(f"🔍 DEBUG: Error details: {str(e)}")
+        
+        # Try to get more specific error info
+        if hasattr(e, 'status'):
+            print(f"🔍 DEBUG: HTTP Status: {e.status}")
+        if hasattr(e, 'data'):
+            print(f"🔍 DEBUG: Response data: {e.data}")
+            
+        return {
+            "error": error_msg,
+            "debug": {
+                "repo": repo_name,
+                "pr": pr_number,
+                "error_type": type(e).__name__,
+                "has_github_token": bool(os.getenv('GITHUB_TOKEN')),
+                "comment_length": len(comment_body)
+            }
+        }
