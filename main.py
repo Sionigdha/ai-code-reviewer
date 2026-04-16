@@ -30,26 +30,49 @@ def home():
 @app.post("/review")
 async def review_pr(request: Request):
     
-    # Basic error handling for JSON
     try:
-        payload = await request.json()
-    except Exception as e:
-        return {"error": f"JSON parsing failed: {e}"}
-    
-    if not payload or "action" not in payload:
-        return {"error": "Invalid payload"}
+        print("🟢 WEBHOOK RECEIVED - Starting processing...")
         
-    action = payload.get("action")
-    if action not in ["opened", "synchronize"]:
-        return {"status": "ignored", "reason": f"Action '{action}' not supported"}
+        # Basic error handling for JSON
+        try:
+            print("🔍 DEBUG: Attempting to parse JSON...")
+            payload = await request.json()
+            print(f"✅ JSON parsed successfully! Keys: {list(payload.keys()) if payload else 'None'}")
+        except Exception as e:
+            print(f"❌ JSON parsing failed: {e}")
+            return {"error": f"JSON parsing failed: {e}"}
+        
+        if not payload or "action" not in payload:
+            print("❌ Invalid payload structure")
+            return {"error": "Invalid payload"}
+        
+        print(f"🔍 DEBUG: Action = {payload.get('action')}")
+            
+        action = payload.get("action")
+        if action not in ["opened", "synchronize"]:
+            print(f"⚠️  Ignoring action: {action}")
+            return {"status": "ignored", "reason": f"Action '{action}' not supported"}
 
-    try:
-        repo_name = payload["repository"]["full_name"]
-        pr_number = payload["pull_request"]["number"]
-        pr_title = payload["pull_request"]["title"]
-        pr_branch = payload.get("pull_request", {}).get("head", {}).get("ref", "unknown")
-    except KeyError as e:
-        return {"error": f"Missing required field: {e}"}
+        try:
+            print("🔍 DEBUG: Extracting PR info...")
+            repo_name = payload["repository"]["full_name"]
+            pr_number = payload["pull_request"]["number"]
+            pr_title = payload["pull_request"]["title"]
+            pr_branch = payload.get("pull_request", {}).get("head", {}).get("ref", "unknown")
+            print(f"✅ PR Info extracted: {repo_name} #{pr_number}")
+        except KeyError as e:
+            print(f"❌ Missing required field: {e}")
+            return {"error": f"Missing required field: {e}"}
+        except Exception as e:
+            print(f"❌ Unexpected error extracting PR info: {e}")
+            return {"error": f"Payload structure error: {e}"}
+            
+    except Exception as e:
+        print(f"💥 WEBHOOK HANDLER CRASHED: {e}")
+        print(f"💥 Error type: {type(e).__name__}")
+        import traceback
+        print(f"💥 Full traceback: {traceback.format_exc()}")
+        return {"error": f"Webhook handler crashed: {e}"}
 
     print(f"\n{'='*50}")
     print(f"🔍 DEBUG: Reviewing PR #{pr_number}: {pr_title}")
